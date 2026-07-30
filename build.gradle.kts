@@ -8,7 +8,8 @@ version = "1.0.0"
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(21))
+        // Paper 26.2 is built and compiled against JDK 25.
+        languageVersion.set(JavaLanguageVersion.of(25))
     }
 }
 
@@ -18,9 +19,16 @@ repositories {
 }
 
 dependencies {
-    // NOTE: adjust this version string to match the exact PaperMC build you run.
-    // "1.21.4-R0.1-SNAPSHOT" is used here as a recent stable Paper API.
-    compileOnly("io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT")
+    // "+" resolves to the latest published 26.2 build. Pin to an exact build
+    // (e.g. "26.2.build.84-stable") instead if you want reproducible builds.
+    compileOnly("io.papermc.paper:paper-api:26.2.build.+")
+
+    // Paper's logging is backed by Log4j2, but paper-api doesn't expose
+    // log4j-core on the compile classpath by itself. Needed for the
+    // ConsoleCaptureAppender to compile against Log4j2's core classes.
+    // This is compileOnly since the real implementation is provided by the
+    // server at runtime — don't shade it into the plugin jar.
+    compileOnly("org.apache.logging.log4j:log4j-core:2.24.3")
 
     // Discord bot library
     implementation("net.dv8tion:JDA:5.1.2") {
@@ -41,7 +49,7 @@ tasks {
 
     compileJava {
         options.encoding = "UTF-8"
-        options.release.set(21)
+        options.release.set(25)
     }
 
     processResources {
