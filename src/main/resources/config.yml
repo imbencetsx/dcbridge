@@ -1,0 +1,17 @@
+# DiscordBridge configuration
+
+discord:
+  # Your Discord bot token (from https://discord.com/developers/applications)
+  token: "YOUR_BOT_TOKEN_HERE"
+  # The Discord channel ID that console output is sent to,
+  # and that whitelisted users can send commands from.
+  log-channel-id: "REPLACE_WITH_CHANNEL_ID"
+
+# How often (in seconds) queued console log lines are flushed to Discord.
+# Lower = more real-time but more Discord API calls.
+log-flush-interval-seconds: 3
+
+# Discord user IDs allowed to execute console commands by typing in the log channel.
+# Right-click a user in Discord (Developer Mode enabled) -> Copy User ID.
+whitelisted-users:
+  - "REPLACE_WITH_YOUR_DISCORD_USER_ID"
