@@ -20,7 +20,7 @@ public class DiscordBridgePlugin extends JavaPlugin {
 
         // Attach a Log4j2 appender to the root logger so every console line
         // (from this plugin, other plugins, and vanilla server logs) is captured.
-        appender = ConsoleCaptureAppender.create(configManager.getMaxQueuedLogLines());
+        appender = ConsoleCaptureAppender.create(configManager.getMaxQueuedLogLines(), configManager);
         LoggerContext context = (LoggerContext) LogManager.getContext(false);
         context.getRootLogger().addAppender(appender);
 

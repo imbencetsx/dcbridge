@@ -7,6 +7,29 @@ discord:
   # and that whitelisted users can send commands from.
   log-channel-id: "REPLACE_WITH_CHANNEL_ID"
 
+  # SECURITY: whitelisted users can ONLY run commands listed here (or under
+  # this prefix). Leave empty to allow any command — NOT recommended, since a
+  # whitelisted (or compromised) user could then run "op", "ban", "stop", etc.
+  # Examples: ["say", "list", "tp", "gamemode"]
+  command-whitelist: []
+
+  # SECURITY: max console commands a single Discord user may dispatch per
+  # minute. 0 disables rate limiting. Prevents a spamming user from flooding
+  # the console/scheduler.
+  max-commands-per-minute: 20
+
+  # SECURITY: redact likely secrets (bot tokens, passwords, API keys, webhook
+  # URLs) from console lines before they are forwarded to Discord. Console
+  # output from ANY plugin can otherwise leak credentials into your log channel.
+  redact-sensitive-lines: true
+  # Regexes applied to every console line before forwarding. Lines become
+  # ***REDACTED*** where matched. Add your own patterns as needed.
+  redact-patterns:
+    - '(?i)(password\s*[=:]\s*)\S+'
+    - '(?i)(token\s*[=:]\s*)\S+'
+    - '(?i)((?:api|secret|client)-?key\s*[=:]\s*)\S+'
+    - 'https?://discord(?:app)?\.com/api/webhooks/\S+'
+
 # How often (in seconds) queued console log lines are flushed to Discord.
 # Lower = more real-time but more Discord API calls.
 log-flush-interval-seconds: 3
