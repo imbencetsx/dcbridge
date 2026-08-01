@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "net.msstore"
-version = "1.1.1"
+version = "1.1.2"
 
 java {
     toolchain {
