@@ -3,7 +3,6 @@ package net.msstore.discordbridge;
 import org.bukkit.configuration.file.FileConfiguration;
 
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -19,6 +18,10 @@ public class ConfigManager {
     private String token;
     private String logChannelId;
     private int flushIntervalSeconds;
+    private int maxQueuedLogLines;
+
+    private boolean chatBridgeEnabled;
+    private String chatChannelId;
 
     public ConfigManager(DiscordBridgePlugin plugin) {
         this.plugin = plugin;
@@ -32,6 +35,10 @@ public class ConfigManager {
         token = cfg.getString("discord.token", "");
         logChannelId = cfg.getString("discord.log-channel-id", "");
         flushIntervalSeconds = cfg.getInt("log-flush-interval-seconds", 3);
+        maxQueuedLogLines = cfg.getInt("max-queued-log-lines", 150);
+
+        chatBridgeEnabled = cfg.getBoolean("chat-bridge.enabled", false);
+        chatChannelId = cfg.getString("chat-bridge.channel-id", "");
 
         whitelistedUsers.clear();
         List<String> ids = cfg.getStringList("whitelisted-users");
@@ -52,6 +59,21 @@ public class ConfigManager {
 
     public int getFlushIntervalSeconds() {
         return Math.max(1, flushIntervalSeconds);
+    }
+
+    public int getMaxQueuedLogLines() {
+        return maxQueuedLogLines > 0 ? maxQueuedLogLines : 150;
+    }
+
+    public boolean isChatBridgeEnabled() {
+        return chatBridgeEnabled
+                && chatChannelId != null
+                && !chatChannelId.isBlank()
+                && !chatChannelId.startsWith("REPLACE_WITH");
+    }
+
+    public String getChatChannelId() {
+        return chatChannelId;
     }
 
     public boolean isWhitelisted(String discordUserId) {

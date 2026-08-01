@@ -6,14 +6,22 @@ import org.apache.logging.log4j.core.LogEvent;
 import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.apache.logging.log4j.core.layout.PatternLayout;
 
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.List;
 import java.util.regex.Pattern;
 
 /**
  * A Log4j2 appender that gets attached to the server's root logger.
  * Every log line the console prints also lands here, gets stripped of
- * color codes, and is placed on a queue that DiscordBotHandler drains
- * periodically and forwards to the configured Discord channel.
+ * color codes, and is placed on a bounded queue that DiscordBotHandler
+ * drains periodically and forwards to the configured Discord channel.
+ *
+ * The queue is capped at maxQueueSize: if lines pile up faster than they
+ * can be sent (e.g. Discord is unreachable), the oldest queued lines are
+ * silently dropped so we always keep the most recent output instead of
+ * one huge backlog.
  */
 public class ConsoleCaptureAppender extends AbstractAppender {
 
@@ -21,17 +29,19 @@ public class ConsoleCaptureAppender extends AbstractAppender {
     private static final Pattern SECTION_COLOR = Pattern.compile("(?i)\u00A7[0-9A-FK-OR]");
     private static final Pattern ANSI_ESCAPE = Pattern.compile("\u001B\\[[;\\d]*m");
 
-    private final ConcurrentLinkedQueue<String> queue = new ConcurrentLinkedQueue<>();
+    private final Deque<String> queue = new ArrayDeque<>();
+    private final int maxQueueSize;
 
-    protected ConsoleCaptureAppender(String name, Filter filter, Layout<String> layout) {
+    protected ConsoleCaptureAppender(String name, Filter filter, Layout<String> layout, int maxQueueSize) {
         super(name, filter, layout, false, null);
+        this.maxQueueSize = Math.max(1, maxQueueSize);
     }
 
-    public static ConsoleCaptureAppender create() {
+    public static ConsoleCaptureAppender create(int maxQueueSize) {
         PatternLayout layout = PatternLayout.newBuilder()
                 .withPattern("[%d{HH:mm:ss} %level] %msg")
                 .build();
-        ConsoleCaptureAppender appender = new ConsoleCaptureAppender("DiscordBridgeAppender", null, layout);
+        ConsoleCaptureAppender appender = new ConsoleCaptureAppender("DiscordBridgeAppender", null, layout, maxQueueSize);
         appender.start();
         return appender;
     }
@@ -50,22 +60,33 @@ public class ConsoleCaptureAppender extends AbstractAppender {
         formatted = ANSI_ESCAPE.matcher(formatted).replaceAll("");
         formatted = formatted.strip();
 
-        if (!formatted.isEmpty()) {
-            queue.add(formatted);
+        if (formatted.isEmpty()) {
+            return;
+        }
+
+        synchronized (queue) {
+            // Drop the oldest backlog once we hit the cap, so we never build
+            // up an unbounded/huge queue while Discord is unreachable - we
+            // just keep the most recent lines and carry on.
+            while (queue.size() >= maxQueueSize) {
+                queue.pollFirst();
+            }
+            queue.addLast(formatted);
         }
     }
 
     /** Drains and returns everything currently queued, in order. */
-    public java.util.List<String> drain() {
-        java.util.List<String> lines = new java.util.ArrayList<>();
-        String line;
-        while ((line = queue.poll()) != null) {
-            lines.add(line);
+    public List<String> drain() {
+        synchronized (queue) {
+            List<String> lines = new ArrayList<>(queue);
+            queue.clear();
+            return lines;
         }
-        return lines;
     }
 
     public boolean hasQueuedLines() {
-        return !queue.isEmpty();
+        synchronized (queue) {
+            return !queue.isEmpty();
+        }
     }
 }

@@ -9,6 +9,10 @@ import org.bukkit.command.TabCompleter;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Handles: /db console whitelist <discord_user_id>
+ *          /db console unwhitelist <discord_user_id>
+ */
 public class DcBridgeCommand implements CommandExecutor, TabCompleter {
 
     private final ConfigManager config;
@@ -19,13 +23,15 @@ public class DcBridgeCommand implements CommandExecutor, TabCompleter {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (args.length != 2 || !(args[0].equalsIgnoreCase("whitelist") || args[0].equalsIgnoreCase("unwhitelist"))) {
-            sender.sendMessage(ChatColor.YELLOW + "Usage: /" + label + " whitelist|unwhitelist <discord_user_id>");
+        if (args.length != 3
+                || !args[0].equalsIgnoreCase("console")
+                || !(args[1].equalsIgnoreCase("whitelist") || args[1].equalsIgnoreCase("unwhitelist"))) {
+            sender.sendMessage(ChatColor.YELLOW + "Usage: /" + label + " console whitelist|unwhitelist <discord_user_id>");
             return true;
         }
 
-        String sub = args[0].toLowerCase();
-        String discordId = args[1];
+        String sub = args[1].toLowerCase();
+        String discordId = args[2];
 
         if (sub.equals("whitelist")) {
             if (!sender.hasPermission("dcbridge.whitelist")) {
@@ -63,9 +69,12 @@ public class DcBridgeCommand implements CommandExecutor, TabCompleter {
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         List<String> options = new ArrayList<>();
         if (args.length == 1) {
+            options.add("console");
+            options.removeIf(s -> !s.startsWith(args[0].toLowerCase()));
+        } else if (args.length == 2 && args[0].equalsIgnoreCase("console")) {
             if (sender.hasPermission("dcbridge.whitelist")) options.add("whitelist");
             if (sender.hasPermission("dcbridge.unwhitelist")) options.add("unwhitelist");
-            options.removeIf(s -> !s.startsWith(args[0].toLowerCase()));
+            options.removeIf(s -> !s.startsWith(args[1].toLowerCase()));
         }
         return options;
     }

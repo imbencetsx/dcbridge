@@ -3,7 +3,7 @@ plugins {
     id("com.gradleup.shadow") version "8.3.5"
 }
 
-group = "net.msstore"
+group = "net.yourname"
 version = "1.0.0"
 
 java {

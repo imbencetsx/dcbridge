@@ -1,14 +1,14 @@
 name: DiscordBridge
-version: '1.0.0'
+version: '1.1.0'
 main: net.msstore.discordbridge.DiscordBridgePlugin
 api-version: '26.2'
 author: You
 description: Forwards console output to a Discord channel and lets whitelisted Discord users run console commands.
 
 commands:
-  dcbridge:
+  db:
     description: Manage the DiscordBridge whitelist.
-    usage: "/<command> whitelist|unwhitelist <discord_user_id>"
+    usage: "/<command> console whitelist|unwhitelist <discord_user_id>"
 
 permissions:
   dcbridge.whitelist:
