@@ -2,8 +2,10 @@ name: DiscordBridge
 version: '1.1.0'
 main: net.msstore.discordbridge.DiscordBridgePlugin
 api-version: '26.2'
-author: You
-description: Forwards console output to a Discord channel and lets whitelisted Discord users run console commands.
+author: micr0softstore
+description: a simple bukkit plugin for maaging server over dicord and having a bridge of miecraft chat in discord.
+folia-supported: true
+
 
 commands:
   db:
