@@ -1,5 +1,5 @@
 name: DiscordBridge
-version: '1.1.0'
+version: '1.1.1'
 main: net.msstore.discordbridge.DiscordBridgePlugin
 api-version: '26.2'
 author: micr0softstore
