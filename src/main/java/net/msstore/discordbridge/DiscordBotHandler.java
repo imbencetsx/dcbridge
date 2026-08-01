@@ -221,8 +221,11 @@ public class DiscordBotHandler extends ListenerAdapter {
             String replacement = matcher.group(0);
 
             try {
-                List<Member> found = guild.retrieveMembersByPrefix(candidate, 5)
-                        .get(3, TimeUnit.SECONDS);
+                java.util.concurrent.CompletableFuture<List<Member>> future = new java.util.concurrent.CompletableFuture<>();
+                guild.retrieveMembersByPrefix(candidate, 5)
+                        .onSuccess(future::complete)
+                        .onError(future::completeExceptionally);
+                List<Member> found = future.get(3, TimeUnit.SECONDS);
                 for (Member member : found) {
                     if (member.getUser().getName().equalsIgnoreCase(candidate)) {
                         replacement = "<@" + member.getId() + ">";
@@ -306,3 +309,4 @@ public class DiscordBotHandler extends ListenerAdapter {
         Bukkit.getScheduler().runTask(plugin, () -> Bukkit.broadcast(message));
     }
 }
+
