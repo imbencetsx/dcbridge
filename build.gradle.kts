@@ -3,8 +3,8 @@ plugins {
     id("com.gradleup.shadow") version "8.3.5"
 }
 
-group = "net.yourname"
-version = "1.0.0"
+group = "net.msstore"
+version = "1.1.1"
 
 java {
     toolchain {
