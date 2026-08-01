@@ -31,17 +31,19 @@ public class ConsoleCaptureAppender extends AbstractAppender {
 
     private final Deque<String> queue = new ArrayDeque<>();
     private final int maxQueueSize;
+    private final ConfigManager config;
 
-    protected ConsoleCaptureAppender(String name, Filter filter, Layout<String> layout, int maxQueueSize) {
+    protected ConsoleCaptureAppender(String name, Filter filter, Layout<String> layout, int maxQueueSize, ConfigManager config) {
         super(name, filter, layout, false, null);
         this.maxQueueSize = Math.max(1, maxQueueSize);
+        this.config = config;
     }
 
-    public static ConsoleCaptureAppender create(int maxQueueSize) {
+    public static ConsoleCaptureAppender create(int maxQueueSize, ConfigManager config) {
         PatternLayout layout = PatternLayout.newBuilder()
                 .withPattern("[%d{HH:mm:ss} %level] %msg")
                 .build();
-        ConsoleCaptureAppender appender = new ConsoleCaptureAppender("DiscordBridgeAppender", null, layout, maxQueueSize);
+        ConsoleCaptureAppender appender = new ConsoleCaptureAppender("DiscordBridgeAppender", null, layout, maxQueueSize, config);
         appender.start();
         return appender;
     }
@@ -58,6 +60,9 @@ public class ConsoleCaptureAppender extends AbstractAppender {
 
         formatted = SECTION_COLOR.matcher(formatted).replaceAll("");
         formatted = ANSI_ESCAPE.matcher(formatted).replaceAll("");
+        if (config != null) {
+            formatted = config.redact(formatted);
+        }
         formatted = formatted.strip();
 
         if (formatted.isEmpty()) {

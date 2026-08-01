@@ -5,6 +5,8 @@ import org.bukkit.configuration.file.FileConfiguration;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 /**
  * Wraps the plugin's config.yml, keeping an in-memory copy of the
@@ -23,6 +25,11 @@ public class ConfigManager {
     private boolean chatBridgeEnabled;
     private String chatChannelId;
 
+    private List<String> commandAllowlist;
+    private int maxCommandsPerMinute;
+    private boolean redactSensitiveLines;
+    private List<Pattern> redactPatterns = List.of();
+
     public ConfigManager(DiscordBridgePlugin plugin) {
         this.plugin = plugin;
     }
@@ -39,6 +46,29 @@ public class ConfigManager {
 
         chatBridgeEnabled = cfg.getBoolean("chat-bridge.enabled", false);
         chatChannelId = cfg.getString("chat-bridge.channel-id", "");
+
+        commandAllowlist = cfg.getStringList("discord.command-whitelist");
+        commandAllowlist.removeIf(s -> s == null || s.isBlank());
+        commandAllowlist.replaceAll(String::trim);
+
+        maxCommandsPerMinute = cfg.getInt("discord.max-commands-per-minute", 20);
+
+        redactSensitiveLines = cfg.getBoolean("discord.redact-sensitive-lines", true);
+        List<String> rawPatterns = cfg.getStringList("discord.redact-patterns");
+        List<Pattern> compiled = new java.util.ArrayList<>();
+        for (String p : rawPatterns) {
+            if (p == null || p.isBlank()) {
+                continue;
+            }
+            try {
+                compiled.add(Pattern.compile(p));
+            } catch (PatternSyntaxException e) {
+                plugin.getLogger().warning("DiscordBridge: invalid redact-pattern ignored: " + p);
+            }
+        }
+        redactPatterns = compiled;
+
+        validateChannelIds();
 
         whitelistedUsers.clear();
         List<String> ids = cfg.getStringList("whitelisted-users");
@@ -78,6 +108,68 @@ public class ConfigManager {
 
     public boolean isWhitelisted(String discordUserId) {
         return whitelistedUsers.contains(discordUserId);
+    }
+
+    public List<String> getCommandAllowlist() {
+        return commandAllowlist;
+    }
+
+    public boolean isCommandAllowed(String command) {
+        if (commandAllowlist.isEmpty()) {
+            return true;
+        }
+        String cmd = command.trim();
+        for (String allowed : commandAllowlist) {
+            if (cmd.equals(allowed) || cmd.startsWith(allowed + " ")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public int getMaxCommandsPerMinute() {
+        return Math.max(0, maxCommandsPerMinute);
+    }
+
+    public boolean isRedactSensitiveLines() {
+        return redactSensitiveLines;
+    }
+
+    /**
+     * Applies configured secret-redaction regexes to a single log line, and
+     * always scrubs the literal configured bot token. Lines are only redacted
+     * if discord.redact-sensitive-lines is enabled.
+     */
+    public String redact(String line) {
+        if (!redactSensitiveLines || line == null) {
+            return line;
+        }
+        String out = line;
+        for (Pattern p : redactPatterns) {
+            out = p.matcher(out).replaceAll("***REDACTED***");
+        }
+        if (token != null && token.length() >= 20) {
+            out = out.replace(token, "***REDACTED***");
+        }
+        return out;
+    }
+
+    private static final Pattern SNOWFLAKE = Pattern.compile("\\d{17,20}");
+
+    private void validateChannelIds() {
+        if (logChannelId != null && !logChannelId.isBlank() && !logChannelId.startsWith("REPLACE_WITH")
+                && !SNOWFLAKE.matcher(logChannelId).matches()) {
+            plugin.getLogger().warning("DiscordBridge: discord.log-channel-id is not a valid Discord channel ID: " + logChannelId);
+        }
+        if (chatChannelId != null && !chatChannelId.isBlank() && !chatChannelId.startsWith("REPLACE_WITH")
+                && !SNOWFLAKE.matcher(chatChannelId).matches()) {
+            plugin.getLogger().warning("DiscordBridge: chat-bridge.channel-id is not a valid Discord channel ID: " + chatChannelId);
+        }
+        if (logChannelId != null && logChannelId.equals(chatChannelId)
+                && !logChannelId.isBlank() && !logChannelId.startsWith("REPLACE_WITH")) {
+            plugin.getLogger().warning("DiscordBridge: log-channel-id and chat-bridge.channel-id are the same; "
+                    + "chat bridge and console-command handling share a channel, which is unsafe. Use different channels.");
+        }
     }
 
     /**

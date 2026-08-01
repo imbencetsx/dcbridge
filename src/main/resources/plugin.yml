@@ -4,7 +4,6 @@ main: net.msstore.discordbridge.DiscordBridgePlugin
 api-version: '26.2'
 author: micr0softstore
 description: a simple bukkit plugin for maaging server over dicord and having a bridge of miecraft chat in discord.
-folia-supported: true
 
 
 commands:

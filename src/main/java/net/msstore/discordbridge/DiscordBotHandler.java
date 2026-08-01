@@ -7,6 +7,7 @@ import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
+import net.dv8tion.jda.api.events.session.ReadyEvent;
 import net.dv8tion.jda.api.events.session.ShutdownEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.requests.GatewayIntent;
@@ -17,7 +18,11 @@ import org.apache.logging.log4j.core.config.Configurator;
 import org.bukkit.Bukkit;
 import org.bukkit.scheduler.BukkitTask;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -38,13 +43,22 @@ public class DiscordBotHandler extends ListenerAdapter {
     private static final int DISCORD_MESSAGE_LIMIT = 2000;
     private static final int INITIAL_RECONNECT_DELAY_SECONDS = 15;
     private static final int MAX_RECONNECT_DELAY_SECONDS = 120;
+    private static final int MAX_COMMAND_LENGTH = 256;
+    private static final int MAX_MENTIONS_PER_MESSAGE = 10;
+    private static final long RATE_WINDOW_NANOS = TimeUnit.MINUTES.toNanos(1);
 
     // Matches things like "@balazskokai" in a chat message.
     private static final Pattern MENTION_PATTERN = Pattern.compile("@([A-Za-z0-9_.]{2,32})");
+    // Discord messages can carry control characters/newlines that would break or
+    // pollute Minecraft chat or the console command parser.
+    private static final Pattern CONTROL_CHARS = Pattern.compile("[\\p{Cc}\\p{Cf}&&[^\\r\\n\\t]]");
 
     private final DiscordBridgePlugin plugin;
     private final ConfigManager config;
     private final ConsoleCaptureAppender appender;
+
+    // Per-Discord-user sliding window of command timestamps for rate limiting.
+    private final Map<String, Deque<Long>> commandTimestamps = new ConcurrentHashMap<>();
 
     private JDA jda;
     private BukkitTask flushTask;
@@ -65,12 +79,15 @@ public class DiscordBotHandler extends ListenerAdapter {
     }
 
     /** Attempts to connect to Discord. Safe to call repeatedly (e.g. for retries). */
-    public void start() {
+    public synchronized void start() {
         if (shuttingDown) {
             return;
         }
         if (config.getToken() == null || config.getToken().isBlank() || config.getToken().startsWith("YOUR_BOT_TOKEN")) {
             plugin.getLogger().warning("DiscordBridge is not configured: set discord.token in config.yml, then reload/restart.");
+            return;
+        }
+        if (jda != null && jda.getStatus() == JDA.Status.CONNECTED) {
             return;
         }
 
@@ -80,21 +97,30 @@ public class DiscordBotHandler extends ListenerAdapter {
                     .setAutoReconnect(false) // we manage retries ourselves, quietly
                     .addEventListeners(this)
                     .build();
-            jda.awaitReady();
-
-            // Connected: reset backoff and (re)start the periodic log flush.
-            currentReconnectDelay = INITIAL_RECONNECT_DELAY_SECONDS;
-            if (flushTask != null) {
-                flushTask.cancel();
-            }
-            long periodTicks = config.getFlushIntervalSeconds() * 20L;
-            flushTask = Bukkit.getScheduler().runTaskTimerAsynchronously(plugin, this::flushConsoleQueue, periodTicks, periodTicks);
-
-            plugin.getLogger().info("DiscordBridge connected to Discord as " + jda.getSelfUser().getAsTag());
+            // build() returns immediately; login is fully async. onReady() and
+            // onShutdown() drive the success/retry paths, so the main server
+            // thread is never blocked waiting on Discord.
         } catch (Exception e) {
             jda = null;
             scheduleReconnect();
         }
+    }
+
+    /** Called by JDA once the bot is connected and the guild cache is loaded. */
+    @Override
+    public void onReady(ReadyEvent event) {
+        if (shuttingDown) {
+            return;
+        }
+        // Connected: reset backoff and (re)start the periodic log flush.
+        currentReconnectDelay = INITIAL_RECONNECT_DELAY_SECONDS;
+        if (flushTask != null) {
+            flushTask.cancel();
+        }
+        long periodTicks = config.getFlushIntervalSeconds() * 20L;
+        flushTask = Bukkit.getScheduler().runTaskTimerAsynchronously(plugin, this::flushConsoleQueue, periodTicks, periodTicks);
+
+        plugin.getLogger().info("DiscordBridge connected to Discord as " + event.getJDA().getSelfUser().getAsTag());
     }
 
     /** Called by JDA when the session ends (e.g. lost connection) since auto-reconnect is off. */
@@ -114,6 +140,10 @@ public class DiscordBotHandler extends ListenerAdapter {
     private void scheduleReconnect() {
         if (shuttingDown) {
             return;
+        }
+        if (pendingReconnectTask != null) {
+            pendingReconnectTask.cancel();
+            pendingReconnectTask = null;
         }
         int delay = currentReconnectDelay;
         plugin.getLogger().warning("[DiscordBridge] Failed to connect to Discord API, retrying in " + delay + " seconds...");
@@ -146,14 +176,15 @@ public class DiscordBotHandler extends ListenerAdapter {
     }
 
     private void flushConsoleQueue() {
-        if (jda == null || !appender.hasQueuedLines()) {
+        JDA current = jda;
+        if (current == null || !appender.hasQueuedLines()) {
             return;
         }
         String channelId = config.getLogChannelId();
         if (channelId == null || channelId.isBlank() || channelId.startsWith("REPLACE_WITH")) {
             return;
         }
-        MessageChannel channel = jda.getChannelById(MessageChannel.class, channelId);
+        MessageChannel channel = current.getChannelById(MessageChannel.class, channelId);
         if (channel == null) {
             return;
         }
@@ -174,10 +205,23 @@ public class DiscordBotHandler extends ListenerAdapter {
     }
 
     private void sendBatch(MessageChannel channel, String content) {
-        String trimmed = content.length() > DISCORD_MESSAGE_LIMIT - 10
-                ? content.substring(0, DISCORD_MESSAGE_LIMIT - 10)
-                : content;
+        String trimmed = truncateUtf16(content, DISCORD_MESSAGE_LIMIT - 10);
         channel.sendMessage("```" + trimmed + "```").queue(s -> {}, f -> {});
+    }
+
+    /**
+     * Truncates a string to at most maxChars UTF-16 code units without splitting
+     * a surrogate pair, so Discord never receives a malformed/invalid message.
+     */
+    private static String truncateUtf16(String s, int maxChars) {
+        if (s.length() <= maxChars) {
+            return s;
+        }
+        String cut = s.substring(0, maxChars);
+        if (Character.isHighSurrogate(cut.charAt(cut.length() - 1))) {
+            cut = cut.substring(0, cut.length() - 1);
+        }
+        return cut;
     }
 
     // ------------------------------------------------------------------
@@ -186,19 +230,17 @@ public class DiscordBotHandler extends ListenerAdapter {
 
     /** Called from the Minecraft chat listener with the plain-text message. */
     public void forwardChatToDiscord(String playerName, String rawMessage) {
-        if (jda == null || !config.isChatBridgeEnabled()) {
+        JDA current = jda;
+        if (current == null || !config.isChatBridgeEnabled()) {
             return;
         }
-        TextChannel channel = jda.getTextChannelById(config.getChatChannelId());
+        TextChannel channel = current.getTextChannelById(config.getChatChannelId());
         if (channel == null) {
             return;
         }
 
         String processed = resolveMentions(rawMessage, channel.getGuild());
-        String content = "<" + playerName + "> " + processed;
-        if (content.length() > DISCORD_MESSAGE_LIMIT) {
-            content = content.substring(0, DISCORD_MESSAGE_LIMIT);
-        }
+        String content = truncateUtf16("<" + playerName + "> " + processed, DISCORD_MESSAGE_LIMIT);
         channel.sendMessage(content).queue(s -> {}, f -> {});
     }
 
@@ -216,7 +258,9 @@ public class DiscordBotHandler extends ListenerAdapter {
         Matcher matcher = MENTION_PATTERN.matcher(message);
         StringBuilder result = new StringBuilder();
 
-        while (matcher.find()) {
+        int resolved = 0;
+        while (matcher.find() && resolved < MAX_MENTIONS_PER_MESSAGE) {
+            resolved++;
             String candidate = matcher.group(1);
             String replacement = matcher.group(0);
 
@@ -267,14 +311,23 @@ public class DiscordBotHandler extends ListenerAdapter {
         if (!config.isWhitelisted(authorId)) {
             return;
         }
-
-        String command = event.getMessage().getContentRaw().trim();
-        if (command.isEmpty()) {
+        if (!allowCommand(authorId)) {
+            event.getMessage().addReaction(net.dv8tion.jda.api.entities.emoji.Emoji.fromUnicode("\ud83d\udeab")).queue(
+                    success -> {}, failure -> {}
+            );
             return;
         }
-        // Strip a leading slash if the user typed one, since console commands don't need it.
-        if (command.startsWith("/")) {
-            command = command.substring(1);
+
+        String command = sanitizeCommand(event.getMessage().getContentRaw());
+        if (command == null || command.isEmpty()) {
+            return;
+        }
+        if (!config.isCommandAllowed(command)) {
+            event.getMessage().addReaction(net.dv8tion.jda.api.entities.emoji.Emoji.fromUnicode("\ud83d\udeab")).queue(
+                    success -> {}, failure -> {}
+            );
+            plugin.getLogger().warning("[DiscordBridge] Blocked disallowed command from Discord user " + authorId + ": " + command);
+            return;
         }
         final String finalCommand = command;
 
@@ -289,10 +342,64 @@ public class DiscordBotHandler extends ListenerAdapter {
         );
     }
 
+    /**
+     * Normalizes a raw Discord message into a single-line console command:
+     * strips leading slashes, rejects newlines/control characters (so a message
+     * can't smuggle extra commands), and caps the length.
+     */
+    private String sanitizeCommand(String raw) {
+        String command = raw == null ? "" : raw.trim();
+        if (command.isEmpty()) {
+            return null;
+        }
+        if (CONTROL_CHARS.matcher(command).find() || command.contains("\n") || command.contains("\r")) {
+            plugin.getLogger().warning("[DiscordBridge] Rejected command containing control characters from Discord.");
+            return null;
+        }
+        if (command.startsWith("/")) {
+            command = command.substring(1);
+        }
+        if (command.length() > MAX_COMMAND_LENGTH) {
+            command = command.substring(0, MAX_COMMAND_LENGTH);
+        }
+        return command.trim();
+    }
+
+    /**
+     * Sliding-window rate limit per Discord user. Returns true if the user is
+     * still allowed to dispatch a command right now.
+     */
+    private boolean allowCommand(String userId) {
+        int limit = config.getMaxCommandsPerMinute();
+        if (limit <= 0) {
+            return true;
+        }
+        long now = System.nanoTime();
+        long cutoff = now - RATE_WINDOW_NANOS;
+        Deque<Long> window = commandTimestamps.computeIfAbsent(userId, k -> new ArrayDeque<>());
+        synchronized (window) {
+            while (!window.isEmpty() && window.peekFirst() < cutoff) {
+                window.pollFirst();
+            }
+            if (window.size() >= limit) {
+                return false;
+            }
+            window.addLast(now);
+            return true;
+        }
+    }
+
     private void handleChatMessage(MessageReceivedEvent event) {
         // contentDisplay resolves real <@id> mentions back into readable @names for us.
         String content = event.getMessage().getContentDisplay();
         if (content.isBlank()) {
+            return;
+        }
+        // Strip control characters (Discord messages can carry them) and cap
+        // length so a single message can't flood/spam Minecraft chat.
+        content = CONTROL_CHARS.matcher(content).replaceAll("");
+        content = truncateUtf16(content, 256).strip();
+        if (content.isEmpty()) {
             return;
         }
 
